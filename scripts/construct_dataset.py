@@ -6,6 +6,7 @@ import os
 import re
 import Bio.PDB.PDBParser
 import warnings
+import math
 warnings.filterwarnings("ignore", message="Used element '.' for Atom")
 
 levels = ["class", "arch", "topo", "superfam"]
@@ -28,7 +29,7 @@ parser.add_argument("--sub-category-level", default="superfam",
                     help="Which CATH-level to use, i.e. class, arch, topo, or superfam (default: %(default)s)")
 parser.add_argument("--min-size", default=500, type=int,
                     help="Minimum number of elements in category in order for it to be included (default: %(default)s)")
-parser.add_argument("--min-resolution", default=3.0,
+parser.add_argument("--min-resolution", default=3.5, type=float,
                     help="The minimum resolution for entries to be included (note that the resolution grows when this number drops) (default: %(default)s)")
 parser.add_argument("--print-group-sizes-only", default=False, action="store_true",
                     help="Just print out the unfiltered group sizes - useful for deciding on a min-size value (default: %(default)s)")
@@ -60,6 +61,8 @@ pdb_parser = Bio.PDB.PDBParser()
 # Iterate over PDB files, and calculate distance from center of mass. Add as additional column
 data['dist'] = 0
 max_distance_to_cm = np.zeros(len(data))
+# import pickle
+# max_distance_to_cm = pickle.load(open('max_distance_to_cm.pickle', 'rb'))
 for index, row in data.iterrows():
     # Extract CATH classification and PDB ID
     cath_id = row[0]
@@ -81,11 +84,11 @@ for index, row in data.iterrows():
     positions_all_atoms = positions_all_atoms - np.mean(positions_all_atoms, axis=0)
 
     max_distance_to_cm[index] = np.max(np.linalg.norm(positions_all_atoms, axis=1))
-    data = data.assign(dist=max_distance_to_cm)
+data = data.assign(dist=max_distance_to_cm)
     
 
 # Group dataframe by [class, architecture] levels
-groups_reduced = []
+minimum_group_len = None
 for name, group in data.groupby(list(range(1,extract_at_level+1))):
 
     # Select elements with at least min_arch_size structures with resolution at least min_resolution (note higher resolution is smaller number)
@@ -97,15 +100,35 @@ for name, group in data.groupby(list(range(1,extract_at_level+1))):
             print(name, len(group))
             continue
 
+        # Group by all subcategories (i.e., to superfamily level)
+        sub_category_groups = group[np.logical_and(group[11] < args.min_resolution, group['dist'] < args.max_distance)].groupby(sub_category_col_range)
+
+        # Calculate group length by summing subgroup lengths
+        group_len = np.sum([len(g[1]) for g in sub_category_groups])
+
+        # Update minimum group length
+        minimum_group_len = group_len if minimum_group_len is None else min(minimum_group_len, group_len)
+                                
+groups_reduced = []
+for name, group in data.groupby(list(range(1,extract_at_level+1))):
+
+    # Select elements with at least min_arch_size structures with resolution at least min_resolution (note higher resolution is smaller number)
+    # and with specified maximum distance to CM.
+    if len(group[np.logical_and(group[11] < args.min_resolution, group['dist'] < args.max_distance)]) > args.min_size:
+
         # Reduce to the minimum number
-        n_entries = args.min_size
+        n_entries = minimum_group_len
         
-        # Reduce to 500 elements, but attempting to select evenly from superfamilies
+        # Reduce to minimum number of elements, but attempting to select evenly from superfamilies
         group_reduced = []
 
         # Group by all subcategories (i.e., to superfamily level)
         sub_category_groups = group[np.logical_and(group[11] < args.min_resolution, group['dist'] < args.max_distance)].groupby(sub_category_col_range)
 
+        # Skip if there is only one subcategory (this violates the constraint that all splits should have all groups represented)
+        if len(sub_category_groups) < args.n_splits:
+            continue
+        
         # Keep track of numbers of entries added so far
         n_added_entries = 0
 
@@ -119,18 +142,20 @@ for name, group in data.groupby(list(range(1,extract_at_level+1))):
 
             # Calculate how much we are allowed to include. This is simply a matter of spreading
             # what remains evenly over the remaining iterations
-            inclusion_size = int((n_entries - n_added_entries) / (len(sub_category_groups) - i))
+            inclusion_size = int(math.ceil((n_entries - n_added_entries) / (len(sub_category_groups) - i)))
 
             included_entries = group_inner.sort_values([11])[:inclusion_size] 
             group_reduced.append(included_entries)
             n_added_entries += len(included_entries)
 
+            # print(name_inner, inclusion_size, len(group_inner.sort_values([11])))
             # print("\t", name_inner)
             # print("\t", len(included_entries), n_added_entries, inclusion_size, len(group_inner))
             
         # Finally, append added entries to form new dataframe
         groups_reduced.append(pd.concat(group_reduced))
 
+        # print(n_added_entries, n_entries, minimum_group_len)
         assert(n_added_entries == n_entries)
 
 if args.print_group_sizes_only:
@@ -163,6 +188,8 @@ for name, group in data_reduced.groupby(list(range(1,extract_at_level+1))):
         sub_categories.append((name, group_inner))
 # Sort them by number of elements
 sub_categories.sort(key=lambda k: len(k[1]), reverse=True)
+
+print("n_categories: ", n_categories)
 
 # Iterate over sorted sub_categories list
 for j, pair in enumerate(sub_categories):
@@ -268,7 +295,7 @@ for index, row in data_reduced.iterrows():
 
         # filter with atom selection
         match = atom_selector_regexp.match(atom.id)
-        if match:
+        if match and len(match.group(0)) == len(atom.id):
             positions_tmp.append(atom.get_coord())
             atom_types_tmp.append(match.group(0))
             # assert(match.group(0) == "CA")
@@ -302,7 +329,7 @@ for i, pos in enumerate(positions):
 
 # Save features
 print(len(set(labels)))
-np.savez_compressed("cath_%d%s"%(len(set(labels)), args.extract_at_level),
+np.savez_compressed("cath_%d%s_%s"%(len(set(labels)), args.extract_at_level, args.atom_selector_regexp.replace("|","")),
                     n_atoms=np.array(n_atoms),
                     atom_types=atom_types_array,
                     res_indices=res_indices_array,
