@@ -35,4 +35,7 @@ The primary data is contained in `positions`. For convenience, these are provide
 ```python
 >>> data['positions'][0][:data['n_atoms'][0]]
 ```
-The `data['labels']` entry contains the CATH labels which will generally be used as the classification targets. The arrays have been ordered to that the 10 splits appear sequentially, which means that the start index for each split is sufficient - provided in `data['split_start_indices]`. The `atom_types` key is associated with the atom type for each position and 'res_indices' with the sequential position in the protein chain. 
+The `data['labels']` entry contains the CATH labels which will generally be used as the classification targets. The arrays have been ordered to that the 10 splits appear sequentially, which means that the start index for each split is sufficient - provided in `data['split_start_indices]`. The `atom_types` key is associated with the atom type for each position and 'res_indices' with the sequential position in the protein chain.
+
+## Licence
+This work is derived from the CATH dataset (http://cathdb.info), which was based on work at http://cath.biochem.ucl.ac.uk. It is licenced under the same license as CATH, namely the Creative Commons Attribution 4.0 International License. The code in the scripts directory is licenced under an MIT licence.
